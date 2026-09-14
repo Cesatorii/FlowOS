@@ -1,0 +1,77 @@
+#!/usr/bin/env python3  
+import argparse  
+import tarfile  
+import json  
+import os  
+import sqlite3  
+import shutil  
+
+def get_db_connection():  
+    return sqlite3.connect("flo.db")  
+
+def check_dependencies(metadata):  
+    """Check if all dependencies are installed."""  
+    conn = get_db_connection()  
+    cursor = conn.cursor()  
+    missing = []  
+    for dep in metadata["dependencies"]:  
+        cursor.execute("SELECT name FROM packages WHERE name = ?", (dep,))  
+        if not cursor.fetchone():  
+            missing.append(dep)  
+    conn.close()  
+    return missing  
+
+def install_package(pkg_path):  
+    # Step 1: Extract the package  
+    with tarfile.open(pkg_path, "r:gz") as tar:  
+        # Extract metadata.json first  
+        tar.extract("metadata.json")  
+        with open("metadata.json") as f:  
+            metadata = json.load(f)  
+
+        # Step 2: Check dependencies  
+        missing_deps = check_dependencies(metadata)  
+        if missing_deps:  
+            print(f"Error: Missing dependencies: {', '.join(missing_deps)}")  
+            os.remove("metadata.json")  # Cleanup  
+            return  
+
+        # Step 3: Extract files to system (e.g., /usr/bin, /usr/share)  
+        for file in metadata["files"]:  
+            # Extract from tar (tar contains relative paths like usr/bin/hello)  
+            src = file.lstrip("/")  # Remove leading / to get tar path  
+            try:  
+                tar.extract(src, path="/")  # Extract to root (requires sudo!)  
+                print(f"Installed: {file}")  
+            except KeyError:  
+                print(f"Warning: File {src} not found in package.")  
+
+        # Step 4: Update database  
+        conn = get_db_connection()  
+        cursor = conn.cursor()  
+
+        # Insert package  
+        cursor.execute("""  
+        INSERT INTO packages (name, version, install_size)  
+        VALUES (?, ?, ?)  
+        """, (metadata["name"], metadata["version"], metadata["install_size"]))  
+        pkg_id = cursor.lastrowid  
+
+        # Insert files  
+        for file in metadata["files"]:  
+            cursor.execute("INSERT INTO files (package_id, path) VALUES (?, ?)", (pkg_id, file))  
+
+        # Insert dependencies  
+        for dep in metadata["dependencies"]:  
+            cursor.execute("INSERT INTO dependencies (package_id, dependency_name) VALUES (?, ?)", (pkg_id, dep))  
+
+        conn.commit()  
+        conn.close()  
+        os.remove("metadata.json")  # Cleanup  
+        print(f"Successfully installed {metadata['name']} v{metadata['version']}")  
+
+if __name__ == "__main__":  
+    parser = argparse.ArgumentParser(description='Install a .flo package')  
+    parser.add_argument('pkg_path', help='Path to .flo file')  
+    args = parser.parse_args()  
+    install_package(args.pkg_path)  

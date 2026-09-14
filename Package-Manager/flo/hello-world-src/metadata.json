@@ -1,0 +1,9 @@
+{
+  "name": "hello-world",
+  "version": "1.0.0",
+  "dependencies": [],
+  "files": [
+    "/usr/bin/hello"
+  ],
+  "install_size": 49
+}
